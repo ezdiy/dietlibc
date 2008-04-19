@@ -16,6 +16,7 @@
 #include <elf.h>
 #include <stdlib.h>
 #include "dietfeatures.h"
+#include "dietelfinfo.h"
 
 #ifdef WANT_GNU_STARTUP_BLOAT
 char* program_invocation_name;
@@ -55,6 +56,7 @@ static void findtlsdata(long* auxvec) {
   Elf32_Phdr* x=0;
 #endif
   size_t i,n=0;
+#ifndef WANT_ELFINFO
   while (*auxvec) {
     if (auxvec[0]==3) {	/* AT_PHDR */
       x=(void*)auxvec[1];
@@ -65,6 +67,18 @@ static void findtlsdata(long* auxvec) {
     }
     auxvec+=2;
   } /* if we don't find the entry, the kernel let us down */
+#else
+  {
+    __diet_elf_addr_t const	*x_addr = __get_elf_aux_value(AT_PHDR);
+    __diet_elf_addr_t const	*n_addr = __get_elf_aux_value(AT_PHNUM);
+
+    (void)auxvec;
+    if (x_addr)
+      x = (__typeof__(x)) *x_addr;
+    if (n_addr)
+      n = *n_addr;
+  }
+#endif
   if (!x || !n) return;	/* a kernel this old does not support thread local storage anyway */
   for (i=0; i<n; ++i)
     if (x[i].p_type==PT_TLS) {
@@ -125,6 +139,7 @@ void __setup_tls(tcbhead_t* mainthread) {
 }
 #endif
 
+#ifndef WANT_ELFINFO
 static void* find_in_auxvec(long* x,long what) {
   while (*x) {
     if (*x==what)
@@ -133,20 +148,30 @@ static void* find_in_auxvec(long* x,long what) {
   }
   return NULL;
 }
+#endif
 
 int stackgap(int argc,char* argv[],char* envp[]);
 int stackgap(int argc,char* argv[],char* envp[]) {
-  long* auxvec=(long*)envp;
 #if defined(WANT_STACKGAP) || defined(WANT_SSP) || defined(WANT_TLS)
   char* rand;
   char* tlsdata;
+#ifndef WANT_ELFINFO
+  long* auxvec=(long*)envp;
   while (*auxvec) ++auxvec; ++auxvec;	/* skip envp to get to auxvec */
+#endif
 #ifdef WANT_STACKGAP
   unsigned short s;
 #endif
 #if defined(WANT_STACKGAP) || defined(WANT_SSP)
   volatile char* gap;
+#ifndef WANT_ELFINFO
   rand=find_in_auxvec(auxvec,25);
+#else
+  {
+    __diet_elf_addr_t const	*rand_addr = __get_elf_aux_value(25);
+    rand = rand_addr ? (void *)*rand_addr : NULL;
+  }
+#endif
   if (!rand) {
     char myrand[10];
     int fd=open("/dev/urandom",O_RDONLY);
@@ -166,13 +191,25 @@ int stackgap(int argc,char* argv[],char* envp[]) {
 #endif
 #endif
 
+#ifndef WANT_ELFINFO
   __vdso=find_in_auxvec(auxvec,33);	// AT_SYSINFO_EHDR -> vdso start address
+#else
+  {
+    __diet_elf_addr_t const	*vdso_addr = __get_elf_aux_value(33);
+    __vdso = vdso_addr ? (void *)*vdso_addr : NULL;
+  }
+#endif
+
 #ifdef __x86_64__
   if (!__vdso) __vdso=(char*)0xffffffffff600000;
 #endif
 
 #ifdef WANT_TLS
+#ifndef WANT_ELFINFO
   findtlsdata(auxvec);
+#else
+  findtlsdata(NULL);
+#endif
   if (__unlikely(__tmemsize+sizeof(tcbhead_t)<sizeof(tcbhead_t)) ||
       __unlikely(__tmemsize>512*1024*1024) ||
       __unlikely(__tmemsize<__tdatasize))
